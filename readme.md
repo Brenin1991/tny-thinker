@@ -1,4 +1,4 @@
-# TnyThinker — Aplicação Prática dos Conceitos de LLM (Transformer, Attention e GPT) 
+# TnyThinker — Aplicação Prática dos Conceitos de LLM do zero (Transformer, Attention e GPT) 
 
 POR BRENO CAMPOS RIBEIRO
 
