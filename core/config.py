@@ -1,6 +1,6 @@
 import torch
 
-MODEL_PATH = "../models/modelo_finetuned_best.pt"
+MODEL_PATH = "models/modelo_finetuned_best.pt"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Parâmetros de geração
