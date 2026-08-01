@@ -350,6 +350,47 @@
     }
     .btn-confirm:hover { opacity: 0.85; }
 
+    /* ==================== IMAGE ATTACH ==================== */
+    #attachBtn {
+        background: transparent; color: var(--text-secondary); border: none;
+        width: 40px; height: 40px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: all 0.2s; flex-shrink: 0;
+    }
+    #attachBtn:hover { background: rgba(255,255,255,0.08); color: var(--accent); }
+    #attachBtn svg { width: 20px; height: 20px; fill: currentColor; }
+    #attachBtn.has-image { color: var(--accent); }
+
+    #imagePreviewBar {
+        display: none; align-items: center; gap: 10px;
+        padding: 8px 24px 0;
+        max-width: 800px; margin: 0 auto; width: 100%;
+    }
+    #imagePreviewBar.visible { display: flex; }
+    #imagePreview {
+        width: 56px; height: 56px; border-radius: 10px;
+        object-fit: cover; border: 1px solid var(--border-color);
+        flex-shrink: 0;
+    }
+    #imagePreviewName {
+        font-size: 12px; color: var(--text-secondary);
+        flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #removeImageBtn {
+        background: transparent; border: none; color: var(--text-secondary);
+        cursor: pointer; padding: 4px; border-radius: 6px;
+        display: flex; align-items: center; transition: color 0.15s;
+        font-family: inherit;
+    }
+    #removeImageBtn:hover { color: var(--danger); }
+    #removeImageBtn svg { width: 16px; height: 16px; fill: currentColor; }
+
+    /* imagem dentro da bolha do usuário */
+    .user-message img {
+        display: block; max-width: 240px; max-height: 200px;
+        border-radius: 12px; margin-bottom: 6px; object-fit: cover;
+    }
+
     @media (max-width: 768px) {
         #sidebar { position: absolute; height: 100%; }
         .message-wrapper { max-width: 100%; }
@@ -409,7 +450,18 @@
 <div id="main">
     <div id="chat"></div>
     <div id="inputArea">
+        <div id="imagePreviewBar">
+            <img id="imagePreview" src="" alt="preview"/>
+            <span id="imagePreviewName"></span>
+            <button id="removeImageBtn" onclick="removeImage()" title="Remover imagem">
+                <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+        </div>
         <div id="inputBox">
+            <input type="file" id="imageInput" accept="image/*" style="display:none" onchange="onImageSelected(event)">
+            <button id="attachBtn" onclick="document.getElementById('imageInput').click()" title="Anexar imagem">
+                <svg viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
+            </button>
             <input id="input" placeholder="Digite sua mensagem aqui..."
                    autocomplete="off" onkeydown="if(event.key==='Enter') send()">
             <button id="sendBtn" onclick="send()">
@@ -453,6 +505,28 @@ const convActions = document.getElementById("conv-actions");
 let sidebarOpen   = true;
 let currentConvId = null;
 let modalRole     = "user";
+let pendingImage  = null; // arquivo de imagem aguardando envio
+
+// ─── image attach ─────────────────────────────────────────
+function onImageSelected(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    pendingImage = file;
+    const url = URL.createObjectURL(file);
+    document.getElementById("imagePreview").src = url;
+    document.getElementById("imagePreviewName").textContent = file.name;
+    document.getElementById("imagePreviewBar").classList.add("visible");
+    document.getElementById("attachBtn").classList.add("has-image");
+    document.getElementById("input").focus();
+}
+
+function removeImage() {
+    pendingImage = null;
+    document.getElementById("imageInput").value = "";
+    document.getElementById("imagePreview").src = "";
+    document.getElementById("imagePreviewBar").classList.remove("visible");
+    document.getElementById("attachBtn").classList.remove("has-image");
+}
 
 // ─── icons ────────────────────────────────────────────────
 const aiIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -783,10 +857,27 @@ async function exportTxt() {
 async function send() {
     const input = document.getElementById("input");
     const text  = input.value.trim();
-    if (!text) return;
+    if (!text && !pendingImage) return;
 
-    addMessage(text, "user");
+    const imageFile = pendingImage;
+    const imageUrl  = imageFile ? document.getElementById("imagePreview").src : null;
+
+    // monta bolha do usuário com preview da imagem se houver
+    const userWrapper = document.createElement("div");
+    userWrapper.className = "message-wrapper user-wrapper";
+    let bubbleContent = "";
+    if (imageUrl) bubbleContent += `<img src="${imageUrl}" alt="imagem enviada">`;
+    if (text)     bubbleContent += escHtml(text);
+    userWrapper.innerHTML = `
+        <div class="message-content">
+            <div class="message user-message">${bubbleContent}</div>
+            ${makeMsgToolbar()}
+        </div>`;
+    chat.appendChild(userWrapper);
+    scrollToBottom();
+
     input.value = "";
+    removeImage();
 
     const botWrapper = document.createElement("div");
     botWrapper.className = "message-wrapper bot-wrapper";
@@ -801,11 +892,20 @@ async function send() {
     const botMessage = botWrapper.querySelector(".bot-message");
 
     try {
-        const res = await fetch(`${API}/chat-stream`, {
-            method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({ message: text, conversation_id: currentConvId })
-        });
+        let res;
+        if (imageFile) {
+            const form = new FormData();
+            form.append("message", text || "O que há nessa imagem?");
+            if (currentConvId) form.append("conversation_id", currentConvId);
+            form.append("image", imageFile);
+            res = await fetch(`${API}/chat-stream`, { method: "POST", body: form });
+        } else {
+            res = await fetch(`${API}/chat-stream`, {
+                method: "POST",
+                headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({ message: text, conversation_id: currentConvId })
+            });
+        }
 
         const newConvId = res.headers.get("X-Conversation-Id");
         if (newConvId && !currentConvId) {
@@ -834,7 +934,6 @@ async function send() {
             }
         }
 
-        // recarrega para obter IDs reais do banco
         if (currentConvId) setTimeout(() => loadConversation(currentConvId), 400);
 
     } catch(e) {

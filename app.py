@@ -11,6 +11,10 @@ from server.database import init_db, get_db, now_iso
 from server.actions import detectar_acao, calcular, gerar_link_busca
 from server.utils import stream_texto
 
+from modules import get
+
+vision = get("vision")
+
 app = Flask(__name__, static_folder="client", static_url_path="/static")
 CORS(app)
 
@@ -138,28 +142,84 @@ def delete_message(msg_id):
     conn.close()
     return jsonify({"ok": True})
 
-# --- ENDPOINT DE CHAT ---
 @app.route("/chat-stream", methods=["POST"])
 def chat_stream():
     global model, tokenizer, cfg, is_dialogue
-    data = request.json
-    user_input = data.get("message", "").strip()
-    conv_id = data.get("conversation_id")
+    
+    # Suporta JSON (só texto) e multipart/form-data (texto + imagem)
+    if request.content_type and "multipart" in request.content_type:
+        user_input = request.form.get("message", "").strip()
+        conv_id    = request.form.get("conversation_id")
+    else:
+        data       = request.json or {}
+        user_input = data.get("message", "").strip()
+        conv_id    = data.get("conversation_id")
 
     if not user_input:
         return Response(stream_texto("mensagem vazia"), mimetype="text/event-stream")
 
-    # --- LOGICA DE BANCO DE DADOS (CRUCIAL) ---
+    # ====================
+    # VISÃO (early return)
+    # ====================
+    imagem = request.files.get("image")
+    if imagem:
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            imagem.save(tmp.name)
+            tmp_path = tmp.name
+
+        try:
+            deteccoes = vision.analisar(tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        objetos = deteccoes.get("objetos", [])
+        classes = deteccoes.get("classes", [])
+
+        partes = []
+        if objetos:
+            desc_det = ", ".join(
+                f"{o['classe']} ({o['confianca']:.0%})"
+                for o in objetos
+            )
+            partes.append(f"🔍 Detectado: {desc_det}")
+
+        if classes:
+            desc_cls = ", ".join(
+                f"{c['classe']} ({c['confianca']:.0%})"
+                for c in classes
+            )
+            partes.append(f"🏷️ Classificação: {desc_cls}")
+
+        bot_text = "\n".join(partes) if partes else "🔍 Nenhum objeto detectado na imagem."
+
+        conn = get_db()
+        if not conv_id:
+            conv_id = str(uuid.uuid4())
+            title = user_input[:40] + ("..." if len(user_input) > 40 else "")
+            conn.execute("INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                        (conv_id, title, now_iso(), now_iso()))
+        conn.execute("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                    (conv_id, "user", user_input, now_iso()))
+        conn.execute("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                    (conv_id, "assistant", bot_text, now_iso()))
+        conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now_iso(), conv_id))
+        conn.commit()
+        conn.close()
+
+        return Response(stream_texto(bot_text), mimetype="text/event-stream", headers={"X-Conversation-Id": conv_id})
+    # --- LOGICA DE BANCO DE DADOS ---
     conn = get_db()
-    
-    # 1. Se não tem ID ou ID não existe, cria nova conversa
+
     if not conv_id:
         conv_id = str(uuid.uuid4())
         title = user_input[:40] + ("..." if len(user_input) > 40 else "")
         conn.execute("INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
                      (conv_id, title, now_iso(), now_iso()))
-    
-    # 2. Salva a mensagem do USUÁRIO
+
     conn.execute("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                  (conv_id, "user", user_input, now_iso()))
     conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now_iso(), conv_id))
@@ -168,15 +228,12 @@ def chat_stream():
 
     acao = detectar_acao(user_input)
 
-    # --- FUNÇÃO AUXILIAR PARA SALVAR RESPOSTA DO BOT ---
     def salvar_e_stream(texto_bot):
-        # Salva no banco
         c = get_db()
         c.execute("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                   (conv_id, "assistant", texto_bot, now_iso()))
         c.commit()
         c.close()
-        # Envia para o HTML
         yield from stream_texto(texto_bot)
 
     # ====================
@@ -196,11 +253,10 @@ def chat_stream():
     def gerar_stream_modelo():
         prompt = f"usuário: {user_input}\nassistente:" if is_dialogue else user_input
         resposta, conf, _ = gerar_resposta(prompt, model, tokenizer, cfg)
-        
+
         if conf < 0.30:
             resposta = "Não tenho certeza suficiente para responder isso."
-        
-        # Salva antes de terminar o stream
+
         c = get_db()
         c.execute("INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                   (conv_id, "assistant", resposta, now_iso()))
