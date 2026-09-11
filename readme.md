@@ -1,7 +1,5 @@
 # TnyThinker — Aplicação Prática dos Conceitos de LLM do zero (Transformer, Attention e GPT) 
 
-POR BRENO CAMPOS RIBEIRO
-
 ## Introdução {#introdução}
 
 Meu objetivo com este projeto é desenvolver um modelo de linguagem simples, leve e rápido, utilizando conjuntos de dados mais enxutos e eficientes. Há alguns meses, publiquei em [meu blog um artigo](https://brenocamposribeiro.com.br/blog/7) apresentando os conceitos de Transformers, Attention e GPT, acompanhado de exemplos simples em Python para demonstrar a teoria por trás dessa tecnologia. Agora, apresento aqui uma aplicação real e escalável de uma LLM (Large Language Model). 
